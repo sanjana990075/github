@@ -3,6 +3,8 @@ import requests
 import json
 import time
 import textwrap
+from services.github_service import fetch_github_issue
+from services.llm_service import analyze_with_gemini
 
 # Page Configuration
 st.set_page_config(
@@ -63,14 +65,28 @@ with col2:
 # ---------- Helper: Cache Results ----------
 # We use st.cache_data to avoid re-calling the API if params haven't changed.
 @st.cache_data(show_spinner=False, ttl=300)
-def get_analysis(url, issue):
-    """Call backend API and return response."""
-    response = requests.post(
-        "http://localhost:8000/analyze",
-        json={"repo_url": url, "issue_number": issue},
-        timeout=45
-    )
-    return response
+def get_analysis_result(url, issue):
+    """Call backend services directly and return result."""
+    try:
+        # Step 1: Fetch Data
+        issue_text = fetch_github_issue(url, issue)
+        
+        # Step 2: Analyze with LLM
+        analysis = analyze_with_gemini(issue_text)
+        
+        return {"status": 200, "data": analysis}
+        
+    except ValueError as ve:
+        # Handle known errors (invalid URL, issue not found)
+        return {"status": 400, "detail": str(ve)}
+        
+    except requests.exceptions.RequestException as re:
+        # Handle network/external API errors
+        return {"status": 502, "detail": f"External API Error: {str(re)}"}
+        
+    except Exception as e:
+        # Handle unexpected server errors
+        return {"status": 500, "detail": f"Internal Server Error: {str(e)}"}
 
 # ---------- Analyze Button ----------
 if st.button("Analyze Issue", use_container_width=True):
@@ -81,11 +97,13 @@ if st.button("Analyze Issue", use_container_width=True):
             try:
                 # Call the caching wrapper
                 start_time = time.time()
-                response = get_analysis(repo_url, int(issue_number))
+                result = get_analysis_result(repo_url, int(issue_number))
                 duration = time.time() - start_time
                 
-                if response.status_code == 200:
-                    data = response.json()
+                status = result.get("status")
+                
+                if status == 200:
+                    data = result.get("data")
                     
                     st.success(f"Analysis Complete ({duration:.2f}s)")
                     
@@ -221,14 +239,12 @@ if st.button("Analyze Issue", use_container_width=True):
                         mime="application/json"
                     )
                         
-                elif response.status_code == 400:
-                    st.error(f"❌ Input Error: {response.json().get('detail')}")
-                elif response.status_code == 404:
+                elif status == 400:
+                    st.error(f"❌ Input Error: {result.get('detail')}")
+                elif status == 404:
                     st.error("❌ Issue not found. Please check the URL and Issue #.")
                 else:
-                    st.error(f"❌ Server Error ({response.status_code}): {response.text}")
+                    st.error(f"❌ Error ({status}): {result.get('detail')}")
 
-            except requests.exceptions.ConnectionError:
-                st.error("❌ Could not connect to backend. Is `uvicorn app.main:app` running?")
             except Exception as e:
                 st.error(f"❌ An unexpected error occurred: {str(e)}")
