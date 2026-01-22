@@ -5,10 +5,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize Gemini client
-# Note: Using the synchronous client for simplicity as per original design, 
-# but in a real high-scale app, async client would be better.
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+# Client is initialized lazily to avoid import-time errors if keys are missing
+client = None
+
+def get_genai_client():
+    """Lazily initialize and return the GenAI client."""
+    global client
+    if client is None:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            # Check Streamlit secrets as a fallback if available
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("GOOGLE_API_KEY")
+            except (ImportError, FileNotFoundError):
+                pass
+        
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            
+    return client
 
 def fallback_json(error_msg: str = "Invalid LLM output") -> dict:
     """Return a safe fallback JSON object if parsing fails."""
@@ -65,8 +81,12 @@ def analyze_with_gemini(issue_text: str) -> dict:
     """
     Analyze a GitHub issue using Google Gemini with few-shot prompting.
     """
-    if not os.getenv("GOOGLE_API_KEY"):
-        return fallback_json("Server Error: Google API Key not configured")
+    try:
+        current_client = get_genai_client()
+        if not current_client:
+             return fallback_json("Server Error: Google API Key not configured. Please add GOOGLE_API_KEY to Secrets.")
+    except Exception as e:
+        return fallback_json(f"Client Init Error: {str(e)}")
 
     # Few-Shot Prompting: Providing examples improves reliability
     system_instruction = """
@@ -125,7 +145,7 @@ OUTPUT ONLY THE JSON OBJECT.
     
     try:
         # Generate content
-        response = client.models.generate_content(
+        response = current_client.models.generate_content(
             model="models/gemini-flash-lite-latest", # Using 1.5 Flash for speed/cost efficiency
             contents=[system_instruction, prompt]
         )
