@@ -2,6 +2,22 @@ import requests
 import os
 from fastapi import HTTPException
 
+# Lazy import streamlit only when needed to avoid dependency issues in non-streamlit envs
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+def get_github_token():
+    """Retrieve GitHub Token from Env Vars or Streamlit Secrets."""
+    token = os.getenv("GITHUB_TOKEN")
+    if not token and st is not None:
+        try:
+            token = st.secrets.get("GITHUB_TOKEN")
+        except (FileNotFoundError, AttributeError):
+            pass
+    return token
+
 def fetch_github_issue(repo_url: str, issue_number: int) -> str:
     """
     Fetch issue title, body, and comments from GitHub API.
@@ -30,13 +46,17 @@ def fetch_github_issue(repo_url: str, issue_number: int) -> str:
         "Accept": "application/vnd.github.v3+json"
     }
     
-    token = os.getenv("GITHUB_TOKEN")
+    token = get_github_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
     try:
         # Fetch issue metadata
         issue_resp = requests.get(issue_url, headers=headers)
+        
+        if issue_resp.status_code == 403:
+             raise ValueError("GitHub API rate limit exceeded. Please add a valid GITHUB_TOKEN to your Streamlit Secrets.")
+
         issue_resp.raise_for_status()
         issue = issue_resp.json()
 
@@ -64,5 +84,5 @@ def fetch_github_issue(repo_url: str, issue_number: int) -> str:
         if e.response.status_code == 404:
             raise ValueError("Issue not found. Please check the URL and issue number.")
         elif e.response.status_code == 403:
-            raise ValueError("GitHub API rate limit exceeded or access denied.")
+            raise ValueError("GitHub API rate limit exceeded or access denied. Check your GITHUB_TOKEN.")
         raise e
